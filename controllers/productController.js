@@ -81,9 +81,6 @@ exports.getProduct = async (req, res) => {
   }
 };
 
-// @desc    Create a new product
-// @route   POST /api/products
-// @access  Private (Admin/Manager)
 exports.createProduct = async (req, res) => {
   const {
     name,
@@ -118,6 +115,14 @@ exports.createProduct = async (req, res) => {
       });
     }
 
+    // Handle tags (accept array or string)
+    let parsedTags = tags || [];
+    if (typeof tags === "string") {
+      parsedTags = tags.split(",").map((tag) => tag.trim()).filter(tag => tag.length > 0);
+    } else if (Array.isArray(tags)) {
+      parsedTags = tags.map((tag) => tag.trim()).filter(tag => tag.length > 0);
+    }
+
     // Parse variants if provided as a string
     let parsedVariants = variants;
     if (typeof variants === "string") {
@@ -134,7 +139,7 @@ exports.createProduct = async (req, res) => {
       stock,
       sku,
       images: validatedImages,
-      tags: tags ? tags.split(",") : [],
+      tags: parsedTags,
       variants: parsedVariants || [],
       status,
       published: published === "true" || published === true,
@@ -150,9 +155,6 @@ exports.createProduct = async (req, res) => {
   }
 };
 
-// @desc    Update a product
-// @route   PUT /api/products/:id
-// @access  Private (Admin/Manager)
 exports.updateProduct = async (req, res) => {
   const {
     name,
@@ -204,6 +206,21 @@ exports.updateProduct = async (req, res) => {
       product.images = validatedImages;
     }
 
+    // Handle tags (accept array or string)
+    let parsedTags = tags;
+    if (typeof tags === "string") {
+      parsedTags = tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0);
+    } else if (Array.isArray(tags)) {
+      parsedTags = tags
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0);
+    } else {
+      parsedTags = product.tags; // Fallback to existing tags if invalid
+    }
+
     // Parse variants if provided as a string
     let parsedVariants = variants;
     if (typeof variants === "string") {
@@ -218,7 +235,7 @@ exports.updateProduct = async (req, res) => {
     product.category = category || product.category;
     product.stock = stock !== undefined ? stock : product.stock;
     product.sku = sku || product.sku;
-    product.tags = tags ? tags.split(",") : product.tags;
+    product.tags = parsedTags;
     product.variants = parsedVariants || product.variants;
     product.status = status || product.status;
     product.published =
@@ -237,9 +254,6 @@ exports.updateProduct = async (req, res) => {
   }
 };
 
-// @desc    Delete a product
-// @route   DELETE /api/products/:id
-// @access  Private (Admin only)
 exports.deleteProduct = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);

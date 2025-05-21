@@ -48,7 +48,7 @@ const customerSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ["active", "inactive", "pending"],
-    default: "active", // Changed to active so customers can buy immediately
+    default: "active", // Set to active to enforce verification
   },
   avatar: {
     public_id: { type: String, default: null },
@@ -78,6 +78,22 @@ customerSchema.methods.generateVerificationToken = function () {
 // Method to compare passwords
 customerSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// Method to verify email
+customerSchema.methods.verifyEmail = async function (token) {
+  if (
+    this.verificationToken === token &&
+    this.verificationTokenExpiry > Date.now()
+  ) {
+    this.emailVerified = true;
+    this.status = "active";
+    this.verificationToken = undefined;
+    this.verificationTokenExpiry = undefined;
+    await this.save();
+    return true;
+  }
+  return false;
 };
 
 const Customer = mongoose.model("Customer", customerSchema);

@@ -9,6 +9,10 @@ const {
   addReview,
 } = require("../controllers/productController");
 const { protect, authorize } = require("../middleware/auth");
+const logRequest = require("../middleware/logging");
+
+// Apply logging middleware to all auth routes
+router.use(logRequest);
 
 // Public routes
 router.get("/", getProducts);

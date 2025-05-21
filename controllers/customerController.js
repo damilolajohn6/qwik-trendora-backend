@@ -16,15 +16,12 @@ cloudinary.config({
 exports.registerCustomer = async (req, res) => {
   const { fullname, email, password, phoneNumber, shippingAddress, avatar } =
     req.body;
-
   try {
-    // Check if customer exists
     const existingCustomer = await Customer.findOne({ email });
     if (existingCustomer) {
       return res.status(400).json({ message: "Customer already exists" });
     }
 
-    // Validate avatar URL if provided
     let avatarData = {};
     if (avatar) {
       if (!isValidCloudinaryUrl(avatar)) {
@@ -38,7 +35,6 @@ exports.registerCustomer = async (req, res) => {
       };
     }
 
-    // Create new customer
     const customer = new Customer({
       fullname,
       email,
@@ -47,17 +43,15 @@ exports.registerCustomer = async (req, res) => {
       shippingAddress,
       avatar: avatarData,
       role: "customer",
-      status: "active",
+      status: "pending",
     });
 
     await customer.save();
 
-    // Generate and send verification email (optional)
     const verificationToken = customer.generateVerificationToken();
     await customer.save();
     await sendVerificationEmail(customer, verificationToken);
 
-    // Generate JWT for customer
     const token = jwt.sign(
       { id: customer._id, role: customer.role },
       process.env.JWT_SECRET,
@@ -75,12 +69,11 @@ exports.registerCustomer = async (req, res) => {
         avatar: customer.avatar.url,
         role: customer.role,
       },
-      message:
-        "Registration successful. Please check your email to verify your account (optional).",
+      message: "Registration successful. Please verify your email.",
     });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Registration error:", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -91,19 +84,22 @@ exports.loginCustomer = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Check if customer exists
     const customer = await Customer.findOne({ email }).select("+password");
     if (!customer) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Check if password matches
     const isMatch = await customer.matchPassword(password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Generate JWT token
+    if (customer.status !== "active") {
+      return res
+        .status(403)
+        .json({ message: "Please verify your email first" });
+    }
+
     const token = jwt.sign(
       { id: customer._id, role: customer.role },
       process.env.JWT_SECRET,
@@ -123,12 +119,38 @@ exports.loginCustomer = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Login error:", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
-// @desc    Get all customers with pagination and search
+// @desc    Verify email
+// @route   GET /api/customers/verify/:token
+// @access  Public
+exports.verifyEmail = async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      verificationToken: req.params.token,
+    });
+    if (!customer || customer.verificationTokenExpiry < Date.now()) {
+      return res.status(400).json({ message: "Invalid or expired token" });
+    }
+
+    const isVerified = await customer.verifyEmail(req.params.token);
+    if (isVerified) {
+      res
+        .status(200)
+        .json({ success: true, message: "Email verified successfully" });
+    } else {
+      res.status(400).json({ message: "Verification failed" });
+    }
+  } catch (error) {
+    console.error("Verification error:", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// @desc    Get all customers with pagination, search, filtering, and sorting
 // @route   GET /api/customers
 // @access  Private (Admin/Manager)
 exports.getCustomers = async (req, res) => {
@@ -136,31 +158,60 @@ exports.getCustomers = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const search = req.query.search || "";
+    const status = req.query.status || "";
+    const startDate = req.query.startDate
+      ? new Date(req.query.startDate)
+      : null;
+    const endDate = req.query.endDate ? new Date(req.query.endDate) : null;
+    const sortBy = req.query.sortBy || "dateJoined";
+    const sortOrder = req.query.sortOrder || "desc";
     const skip = (page - 1) * limit;
 
-    const customers = await Customer.find({
+    // Build query
+    const query = {
       $or: [
         { fullname: { $regex: search, $options: "i" } },
         { email: { $regex: search, $options: "i" } },
         { phoneNumber: { $regex: search, $options: "i" } },
       ],
-    })
-      .populate("orders", "invoice status")
+    };
+
+    // Apply status filter
+    if (status) {
+      query.status = status;
+    }
+
+    // Apply date range filter
+    if (startDate && endDate) {
+      query.dateJoined = { $gte: startDate, $lte: endDate };
+    } else if (startDate) {
+      query.dateJoined = { $gte: startDate };
+    } else if (endDate) {
+      query.dateJoined = { $lte: endDate };
+    }
+
+    // Apply sorting
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === "asc" ? 1 : -1;
+
+    const customers = await Customer.find(query)
+      .populate("orders", "invoiceNumber status")
       .skip(skip)
       .limit(limit)
-      .sort({ dateJoined: -1 });
+      .sort(sortOptions);
 
-    const total = await Customer.countDocuments({
-      $or: [
-        { fullname: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { phoneNumber: { $regex: search, $options: "i" } },
-      ],
-    });
+    const total = await Customer.countDocuments(query);
 
     res.status(200).json({
       success: true,
-      data: customers,
+      data: customers.map((c) => ({
+        _id: c._id,
+        dateJoined: c.dateJoined,
+        fullname: c.fullname,
+        email: c.email,
+        phoneNumber: c.phoneNumber,
+        action: null, // Frontend handles actions
+      })),
       pagination: {
         currentPage: page,
         totalPages: Math.ceil(total / limit),
@@ -168,8 +219,8 @@ exports.getCustomers = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Get customers error:", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -178,17 +229,26 @@ exports.getCustomers = async (req, res) => {
 // @access  Private (Admin/Manager/Customer)
 exports.getCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id).populate(
+    // Validate id parameter
+    const { id } = req.params;
+    if (!id || typeof id !== "string" || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+
+    const customer = await Customer.findById(id).populate(
       "orders",
-      "invoice status"
+      "invoiceNumber status"
     );
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
     res.status(200).json({ success: true, data: customer });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Get customer error:", error.message);
+    if (error.name === "CastError" && error.path === "_id") {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -200,13 +260,11 @@ exports.createCustomer = async (req, res) => {
     req.body;
 
   try {
-    // Check if customer exists
     const existingCustomer = await Customer.findOne({ email });
     if (existingCustomer) {
       return res.status(400).json({ message: "Customer already exists" });
     }
 
-    // Validate avatar URL if provided
     let avatarData = {};
     if (avatar) {
       if (!isValidCloudinaryUrl(avatar)) {
@@ -220,7 +278,6 @@ exports.createCustomer = async (req, res) => {
       };
     }
 
-    // Create new customer
     const customer = new Customer({
       fullname,
       email,
@@ -229,17 +286,15 @@ exports.createCustomer = async (req, res) => {
       shippingAddress,
       avatar: avatarData,
       role: "customer",
-      status: "active",
+      status: "pending",
     });
 
     await customer.save();
 
-    // Generate and send verification email (optional)
     const verificationToken = customer.generateVerificationToken();
     await customer.save();
     await sendVerificationEmail(customer, verificationToken);
 
-    // Generate JWT for customer
     const token = jwt.sign(
       { id: customer._id, role: customer.role },
       process.env.JWT_SECRET,
@@ -257,12 +312,11 @@ exports.createCustomer = async (req, res) => {
         avatar: customer.avatar.url,
         role: customer.role,
       },
-      message:
-        "Customer created. Please check email to verify account (optional).",
+      message: "Customer created. Please verify email.",
     });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Create customer error:", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -273,12 +327,17 @@ exports.updateCustomer = async (req, res) => {
   const { fullname, email, phoneNumber, shippingAddress, avatar } = req.body;
 
   try {
-    const customer = await Customer.findById(req.params.id);
+    // Validate id parameter
+    const { id } = req.params;
+    if (!id || typeof id !== "string" || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+
+    const customer = await Customer.findById(id);
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    // Check if user has permission (admin, manager, or self-update)
     if (
       req.user.role !== "admin" &&
       req.user.role !== "manager" &&
@@ -289,7 +348,6 @@ exports.updateCustomer = async (req, res) => {
         .json({ message: "Not authorized to update this customer" });
     }
 
-    // Update avatar if provided
     if (avatar) {
       if (!isValidCloudinaryUrl(avatar)) {
         return res
@@ -297,7 +355,11 @@ exports.updateCustomer = async (req, res) => {
           .json({ message: "Invalid Cloudinary URL for avatar" });
       }
       if (customer.avatar.public_id) {
-        await cloudinary.uploader.destroy(customer.avatar.public_id);
+        try {
+          await cloudinary.uploader.destroy(customer.avatar.public_id);
+        } catch (cloudError) {
+          console.error("Failed to delete old avatar:", cloudError);
+        }
       }
       customer.avatar = {
         public_id: avatar.split("/").pop().split(".")[0],
@@ -313,8 +375,11 @@ exports.updateCustomer = async (req, res) => {
     await customer.save();
     res.status(200).json({ success: true, data: customer });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Update customer error:", error.message);
+    if (error.name === "CastError" && error.path === "_id") {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -323,28 +388,38 @@ exports.updateCustomer = async (req, res) => {
 // @access  Private (Admin only)
 exports.deleteCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    // Validate id parameter
+    const { id } = req.params;
+    if (!id || typeof id !== "string" || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+
+    const customer = await Customer.findById(id);
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    // Check admin role
     if (req.user.role !== "admin") {
       return res
         .status(403)
         .json({ message: "Only admins can delete customers" });
     }
 
-    // Delete avatar from Cloudinary if exists
     if (customer.avatar.public_id) {
-      await cloudinary.uploader.destroy(customer.avatar.public_id);
+      try {
+        await cloudinary.uploader.destroy(customer.avatar.public_id);
+      } catch (cloudError) {
+        console.error("Failed to delete avatar:", cloudError);
+      }
     }
 
     await customer.remove();
     res.status(200).json({ success: true, message: "Customer deleted" });
   } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Delete customer error:", error.message);
+    if (error.name === "CastError" && error.path === "_id") {
+      return res.status(400).json({ message: "Invalid customer ID" });
+    }
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
-

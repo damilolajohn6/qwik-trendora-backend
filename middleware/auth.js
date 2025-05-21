@@ -32,14 +32,20 @@ exports.protect = async (req, res, next) => {
 
       return res.status(401).json({ message: "User or Customer not found" });
     } catch (error) {
-      console.error(error);
-      res.status(401).json({ message: "Not authorized, token failed" });
+      console.error("Token verification error:", error.message);
+      if (error.name === "TokenExpiredError") {
+        return res
+          .status(401)
+          .json({ message: "Token expired, please log in again" });
+      }
+      if (error.name === "JsonWebTokenError") {
+        return res.status(401).json({ message: "Invalid token" });
+      }
+      return res.status(401).json({ message: "Not authorized, token failed" });
     }
   }
 
-  if (!token) {
-    res.status(401).json({ message: "Not authorized, no token" });
-  }
+  return res.status(401).json({ message: "Not authorized, no token provided" });
 };
 
 exports.authorize = (...roles) => {
@@ -55,7 +61,6 @@ exports.authorize = (...roles) => {
 
 // Middleware for customer input validation
 exports.validateCustomer = (req, res, next) => {
-  // Ensure req.body exists
   if (!req.body) {
     return res.status(400).json({ message: "Request body is empty" });
   }
@@ -63,7 +68,6 @@ exports.validateCustomer = (req, res, next) => {
   const { fullname, email, password, phoneNumber } = req.body;
   let shippingAddress = req.body.shippingAddress;
 
-  // Check top-level fields
   if (!fullname || !email || !password || !phoneNumber) {
     return res.status(400).json({
       message:
@@ -71,20 +75,15 @@ exports.validateCustomer = (req, res, next) => {
     });
   }
 
-  // Handle shippingAddress parsing for multipart/form-data
   if (typeof shippingAddress === "string") {
     try {
       shippingAddress = JSON.parse(shippingAddress);
     } catch (error) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Invalid shippingAddress format: must be a valid JSON object",
-        });
+      return res.status(400).json({
+        message: "Invalid shippingAddress format: must be a valid JSON object",
+      });
     }
   } else if (!shippingAddress) {
-    // If shippingAddress is not provided, try to construct it from individual fields
     shippingAddress = {
       street: req.body["shippingAddress[street]"],
       city: req.body["shippingAddress[city]"],
@@ -94,7 +93,6 @@ exports.validateCustomer = (req, res, next) => {
     };
   }
 
-  // Validate shippingAddress fields
   if (
     !shippingAddress ||
     !shippingAddress.street ||
@@ -110,7 +108,6 @@ exports.validateCustomer = (req, res, next) => {
     });
   }
 
-  // Attach the parsed shippingAddress to req.body
   req.body.shippingAddress = shippingAddress;
   next();
 };

@@ -8,8 +8,16 @@ const {
   resetPassword,
   getUserProfile,
   updateUserProfile,
+  getUsers,
+  deleteUser,
+  getUserById,
+  updateUserById,
 } = require("../controllers/authController");
 const { protect, authorize } = require("../middleware/auth");
+const logRequest = require("../middleware/logging");
+
+// Apply logging middleware to all auth routes
+router.use(logRequest);
 
 // Public routes
 router.post("/register", registerUser);
@@ -17,22 +25,36 @@ router.post("/login", loginUser);
 router.get("/verify/:token", verifyEmail);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password/:token", resetPassword);
+
+// Protected routes
 router.get(
   "/profile",
   protect,
-  authorize("customer", "admin", "manager"),
+  authorize("customer", "admin", "manager", "staff"),
   getUserProfile
 );
 router.put(
   "/profile",
   protect,
-  authorize("customer", "admin", "manager"),
+  authorize("customer", "admin", "manager", "staff"),
   updateUserProfile
 );
 
-// Protected routes (example - restrict to admin)
-router.get("/protected", protect, authorize("admin"), (req, res) => {
-  res.json({ message: "Protected route accessed", user: req.user });
-});
+// Fetch all users (admin, manager, staff only)
+router.get("/users", protect, authorize("admin", "manager", "staff"), getUsers);
+
+// Fetch a single user by ID (admin, manager, staff only)
+router.get(
+  "/users/:id",
+  protect,
+  authorize("admin", "manager", "staff"),
+  getUserById
+);
+
+// Update a user by ID (admin only)
+router.put("/users/:id", protect, authorize("admin"), updateUserById);
+
+// Delete a user (admin only)
+router.delete("/users/:id", protect, authorize("admin"), deleteUser);
 
 module.exports = router;

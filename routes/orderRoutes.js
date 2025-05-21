@@ -10,6 +10,10 @@ const {
   processPayment,
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
+const logRequest = require("../middleware/logging");
+
+// Apply logging middleware to all auth routes
+router.use(logRequest);
 
 // Customer routes
 router.post("/", protect, authorize("customer"), createOrder);

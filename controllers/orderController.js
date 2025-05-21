@@ -4,13 +4,15 @@ const Customer = require("../models/Customer");
 const {
   sendOrderConfirmationEmail,
   sendOrderUpdateEmail,
+  sendAdminNotificationEmail,
 } = require("../utils/email");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // @desc    Create a new order
 // @route   POST /api/orders
 // @access  Private (Customer)
 exports.createOrder = async (req, res) => {
-  const { items, paymentMethod, shippingAddress } = req.body;
+  const { items, paymentMethod, shippingAddress, paymentIntentId } = req.body;
 
   try {
     // Generate unique invoice number
@@ -24,6 +26,21 @@ exports.createOrder = async (req, res) => {
       totalAmount += item.price * item.quantity;
     }
 
+    // Create Stripe payment intent if not provided
+    let paymentIntent;
+    if (!paymentIntentId) {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(totalAmount * 100), // Amount in cents
+        currency: "ngn", // Nigerian Naira
+        payment_method: paymentMethod === "Card" ? "card" : null,
+        confirmation_method: "manual",
+        confirm: false,
+        metadata: { invoiceNumber },
+      });
+    } else {
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    }
+
     const order = new Order({
       invoiceNumber,
       customer: req.user._id,
@@ -31,6 +48,8 @@ exports.createOrder = async (req, res) => {
       totalAmount,
       paymentMethod,
       shippingAddress,
+      paymentIntentId: paymentIntent.id,
+      paymentStatus: "pending",
     });
 
     await order.save();
@@ -46,7 +65,23 @@ exports.createOrder = async (req, res) => {
       );
     }
 
-    res.status(201).json({ success: true, data: order });
+    // Send admin notification for new order
+    const admins = await Customer.find({ role: "admin" }).select("email");
+    const adminEmails = admins.map((admin) => admin.email);
+    try {
+      await sendAdminNotificationEmail(order, "new_order", adminEmails);
+    } catch (emailError) {
+      console.error(
+        "Failed to send admin notification email:",
+        emailError.message
+      );
+    }
+
+    res.status(201).json({
+      success: true,
+      data: order,
+      clientSecret: paymentIntent.client_secret,
+    });
   } catch (error) {
     console.error(error.message);
     res.status(500).json({ message: "Server Error" });
@@ -176,6 +211,20 @@ exports.updateOrder = async (req, res) => {
       console.error("Failed to send order update email:", emailError.message);
     }
 
+    // Send admin notification for refund request
+    if (refund && refund.status === "pending") {
+      const admins = await Customer.find({ role: "admin" }).select("email");
+      const adminEmails = admins.map((admin) => admin.email);
+      try {
+        await sendAdminNotificationEmail(order, "refund_request", adminEmails);
+      } catch (emailError) {
+        console.error(
+          "Failed to send admin refund notification email:",
+          emailError.message
+        );
+      }
+    }
+
     res.status(200).json({ success: true, data: order });
   } catch (error) {
     console.error(error.message);
@@ -216,6 +265,18 @@ exports.deleteOrder = async (req, res) => {
       await sendOrderUpdateEmail(order, customer);
     } catch (emailError) {
       console.error("Failed to send order update email:", emailError.message);
+    }
+
+    // Send admin notification for refund request
+    const admins = await Customer.find({ role: "admin" }).select("email");
+    const adminEmails = admins.map((admin) => admin.email);
+    try {
+      await sendAdminNotificationEmail(order, "refund_request", adminEmails);
+    } catch (emailError) {
+      console.error(
+        "Failed to send admin refund notification email:",
+        emailError.message
+      );
     }
 
     res
@@ -269,9 +330,17 @@ exports.processPayment = async (req, res) => {
         .json({ message: "Not authorized to process this payment" });
     }
 
-    order.paymentStatus = "completed";
-    order.status = order.status === "pending" ? "processing" : order.status;
-    await order.save();
+    // Confirm payment with Stripe
+    const paymentIntent = await stripe.paymentIntents.confirm(
+      order.paymentIntentId
+    );
+    if (paymentIntent.status === "succeeded") {
+      order.paymentStatus = "completed";
+      order.status = order.status === "pending" ? "processing" : order.status;
+      await order.save();
+    } else {
+      return res.status(400).json({ message: "Payment failed" });
+    }
 
     // Send order update email
     const customer = await Customer.findById(order.customer);

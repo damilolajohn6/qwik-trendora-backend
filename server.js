@@ -1,10 +1,10 @@
-const express = require("express");
 const dotenv = require("dotenv");
+dotenv.config();
+const express = require("express");
 const cors = require("cors");
-const fileUpload = require("express-fileupload");
 const connectDB = require("./config/db");
 
-dotenv.config();
+const logger = require("./middleware/logging");
 
 connectDB();
 
@@ -12,13 +12,14 @@ const app = express();
 
 app.use(express.json());
 app.use(cors());
-// No need for fileUpload since we're using Cloudinary URLs now
-// app.use(fileUpload({ useTempFiles: true }));
+app.use(logger);
 
 const authRoutes = require("./routes/authRoutes");
 const customerRoutes = require("./routes/customerRoutes");
 const productRoutes = require("./routes/productRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 const { protect, authorize } = require("./middleware/auth");
 
 app.get("/", (req, res) => {
@@ -29,6 +30,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 const PORT = process.env.PORT || 8000;
 

@@ -181,9 +181,65 @@ const sendOrderUpdateEmail = async (order, customer) => {
   await transporter.sendMail(mailOptions);
 };
 
+// Function to send admin notification email
+const sendAdminNotificationEmail = async (order, type, adminEmails) => {
+  const adminUrl = `${process.env.FRONTEND_URL}/admin/orders/${order._id}`;
+  let subject, htmlContent;
+
+  if (type === "new_order") {
+    subject = `New Order Alert - ${order.invoiceNumber}`;
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #333;">New Order Received</h2>
+        <p>A new order has been placed (Invoice: ${order.invoiceNumber}) by ${
+      order.customer.fullname
+    }.</p>
+        <p><strong>Total Amount:</strong> ₦${order.totalAmount.toFixed(2)}</p>
+        <p><strong>Status:</strong> ${
+          order.status.charAt(0).toUpperCase() + order.status.slice(1)
+        }</p>
+        <a href="${adminUrl}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">Manage Order</a>
+        <p style="margin-top: 20px;">Please review and process this order promptly.</p>
+        <hr style="border-top: 1px solid #eee; margin: 20px 0;" />
+        <p style="color: #999; font-size: 12px;">© ${new Date().getFullYear()} Trendora. All rights reserved.</p>
+      </div>
+    `;
+  } else if (type === "refund_request") {
+    subject = `Refund Request - ${order.invoiceNumber}`;
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #333;">New Refund Request</h2>
+        <p>A refund request has been initiated for order (Invoice: ${
+          order.invoiceNumber
+        }) by ${order.customer.fullname}.</p>
+        <p><strong>Refund Amount:</strong> ₦${order.refund.amount.toFixed(
+          2
+        )}</p>
+        <p><strong>Reason:</strong> ${
+          order.refund.reason || "Not specified"
+        }</p>
+        <a href="${adminUrl}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">Manage Refund</a>
+        <p style="margin-top: 20px;">Please review and process this refund request.</p>
+        <hr style="border-top: 1px solid #eee; margin: 20px 0;" />
+        <p style="color: #999; font-size: 12px;">© ${new Date().getFullYear()} Trendora. All rights reserved.</p>
+      </div>
+    `;
+  }
+
+  const mailOptions = {
+    from: `"Trendora Support" <${process.env.SMTP_MAIL}>`,
+    to: adminEmails.join(", "), // Send to multiple admins
+    subject,
+    html: htmlContent,
+  };
+
+  await transporter.sendMail(mailOptions);
+};
+
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendOrderConfirmationEmail,
   sendOrderUpdateEmail,
+  sendAdminNotificationEmail,
 };
